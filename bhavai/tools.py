@@ -20,7 +20,7 @@ import subprocess
 from pathlib import Path
 
 from bhavai.config import logger, CWD
-from bhavai.context import get_folder_tree_string
+from bhavai.context import get_folder_tree_string, is_env_file
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Security: command blocklist
@@ -31,6 +31,7 @@ BLOCKED_COMMANDS = [
     "shutil.rmtree", "os.remove",
     "format", "mkfs", "drop table",
 ]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Path sandboxing
@@ -164,10 +165,23 @@ def read_file(path: str) -> str:
     """
     Reads and returns full text content of a file inside CWD.
     Git is initialised first so every workspace is always tracked.
+
+    SECURITY: .env and secrets files are hard-blocked — their content
+    is never returned to the agent or sent to the LLM.
     """
     logger.info("read_file('%s')", path)
     ensure_git_initialized()
     resolved = validate_path(path)
+
+    # ── Env / secrets guard ───────────────────────────── #
+    if is_env_file(resolved):
+        logger.warning("Blocked read attempt on secrets file: '%s'", path)
+        return (
+            f"Access Denied: '{path}' is an environment/secrets file. "
+            f"BhavAI never reads .env or secrets files to protect your credentials. "
+            f"If you need to check config, inspect the file yourself manually."
+        )
+
     if not resolved.exists():
         return f"Error: '{path}' does not exist."
     if not resolved.is_file():
@@ -191,6 +205,14 @@ def write_file(path: str, content: str) -> str:
     logger.info("write_file('%s', %d chars)", path, len(content))
     ensure_git_initialized()
     resolved = validate_path(path)
+
+    # ── Env / secrets guard ───────────────────────────── #
+    if is_env_file(resolved):
+        logger.warning("Blocked write attempt on secrets file: '%s'", path)
+        return (
+            f"Access Denied: '{path}' is an environment/secrets file. "
+            f"BhavAI never writes to .env or secrets files."
+        )
 
     # Warn agent if it ignores the 60-line guideline
     line_count = content.count("\n") + 1
@@ -277,6 +299,15 @@ def append_chunk(path: str, chunk: str, done: bool = False) -> str:
     ensure_git_initialized()
 
     resolved = validate_path(path)
+
+    # ── Env / secrets guard ───────────────────────────── #
+    if is_env_file(resolved):
+        logger.warning("Blocked append_chunk attempt on secrets file: '%s'", path)
+        return (
+            f"Access Denied: '{path}' is an environment/secrets file. "
+            f"BhavAI never writes to .env or secrets files."
+        )
+
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
 

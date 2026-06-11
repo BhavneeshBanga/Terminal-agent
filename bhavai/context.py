@@ -3,6 +3,31 @@ from pathlib import Path
 import fnmatch
 from bhavai.config import logger
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Env / secrets file detection
+# Imported by tools.py too — single source of truth for what is "secret".
+# ─────────────────────────────────────────────────────────────────────────────
+
+def is_env_file(path: Path) -> bool:
+    """
+    Returns True if this file is an environment / secrets file that must
+    never be shown in the folder tree or read by the agent.
+
+    Blocks:
+      • Any filename starting with '.env'  (.env, .env.local, .env.production …)
+      • .envrc, .netrc, .htpasswd
+      • Common secrets filenames: secrets.yaml/yml/json, credentials.json
+    """
+    name = path.name.lower()
+    if name.startswith(".env"):
+        return True
+    if name in {".envrc", ".secrets", ".secret", ".netrc", ".htpasswd",
+                "credentials.json", "secrets.yaml", "secrets.yml", "secrets.json"}:
+        return True
+    return False
+
+
 def parse_gitignore(root_dir: Path) -> list:
     """Parses a .gitignore file if present, returning list of glob patterns."""
     patterns = []
@@ -22,9 +47,22 @@ def parse_gitignore(root_dir: Path) -> list:
             logger.error("Failed to parse .gitignore: %s", e)
     return patterns
 
+
 def should_ignore(path: Path, root_dir: Path, gitignore_patterns: list) -> bool:
-    """Determines whether a given path should be ignored based on gitignore and default filters."""
-    # Standard directories/files we always ignore for safety & token budget
+    """
+    Determines whether a given path should be hidden from the folder tree.
+
+    Priority order:
+      1. Env / secrets files — ALWAYS hidden regardless of .gitignore
+      2. Hard-coded noise directories (.git, __pycache__, node_modules …)
+      3. .gitignore patterns
+    """
+    # ── 1. Env / secrets files — never shown to LLM ──────────────────────── #
+    if path.is_file() and is_env_file(path):
+        logger.debug("Hiding secrets file from tree: %s", path.name)
+        return True
+
+    # ── 2. Standard noise directories ────────────────────────────────────── #
     default_ignores = {
         ".git",
         "node_modules",
@@ -37,28 +75,27 @@ def should_ignore(path: Path, root_dir: Path, gitignore_patterns: list) -> bool:
         ".vscode",
         ".bhavai",
     }
-    
-    # Check parts of the path against default ignores
+
     for part in path.relative_to(root_dir).parts:
         if part in default_ignores:
             return True
         if part.endswith(".egg-info"):
             return True
 
-    # Check against gitignore patterns
+    # ── 3. .gitignore patterns ────────────────────────────────────────────── #
     rel_path_str = str(path.relative_to(root_dir)).replace("\\", "/")
     for pattern in gitignore_patterns:
-        # If pattern is folder-specific and ends with slash
         if pattern.endswith("/"):
             clean_pattern = pattern.rstrip("/")
-            # Check if any path segment matches the folder name
             if clean_pattern in path.relative_to(root_dir).parts:
                 return True
         else:
-            # General file glob check
-            if fnmatch.fnmatch(rel_path_str, pattern) or any(fnmatch.fnmatch(part, pattern) for part in path.relative_to(root_dir).parts):
+            if fnmatch.fnmatch(rel_path_str, pattern) or any(
+                fnmatch.fnmatch(part, pattern)
+                for part in path.relative_to(root_dir).parts
+            ):
                 return True
-                
+
     return False
 
 def build_folder_tree(root_dir: Path, current_dir: Path = None, prefix: str = "", gitignore_patterns: list = None) -> list:

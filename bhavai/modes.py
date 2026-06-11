@@ -37,6 +37,7 @@ def generate_plan(user_input: str, folder_tree: str, feedback: str = None) -> li
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
+    raw_response = ''
     
     try:
         raw_response = query_llm(messages)

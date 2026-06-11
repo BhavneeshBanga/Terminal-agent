@@ -2,6 +2,7 @@ import os
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
+import httpx
 
 # Load .env file from current working directory or fallback to system environment variables
 load_dotenv()

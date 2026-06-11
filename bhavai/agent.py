@@ -66,6 +66,8 @@ STRICT RULES  (never break these)
 3. Blocked commands: rm, rmdir, del, unlink, shutil.rmtree, os.remove, format, mkfs, drop table.
 4. Work step-by-step; show reasoning in "thought".
 5. Call final_answer when done.
+6. NEVER attempt to read .env, .env.local, .env.example, .env.*, credentials.json or any
+   secrets file. These are permanently blocked. If you need config info, ask the user instead.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚠  OUTPUT TOKEN BUDGET — READ CAREFULLY
@@ -323,9 +325,10 @@ def run_agent_loop(
         )
 
         # ── Query LLM ──────────────────────────────────────────────────── #
+        raw_response = ""   # initialise so it is always bound even if query fails
         with console.status("[bold blue]Thinking…[/bold blue]", spinner="dots"):
             try:
-                messages    = memory.get_messages(system_prompt)
+                messages     = memory.get_messages(system_prompt)
                 raw_response = query_llm(messages)
             except Exception as exc:
                 err = f"LLM Error: {exc}"
@@ -333,9 +336,16 @@ def run_agent_loop(
                 logger.error(err)
                 return err
 
+        # Guard: query_llm returned empty string (should not happen, but be safe)
+        if not raw_response:
+            err = "LLM returned an empty response. Please try again."
+            console.print(f"[bold red]{err}[/bold red]")
+            logger.error(err)
+            return err
+
         # ── Parse JSON ─────────────────────────────────────────────────── #
         try:
-            parsed                = parse_llm_json(raw_response)
+            parsed= parse_llm_json(raw_response)
             consecutive_json_errs = 0          # reset on success
         except ValueError as exc:
             consecutive_json_errs += 1
