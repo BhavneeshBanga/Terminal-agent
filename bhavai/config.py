@@ -5,10 +5,14 @@ from dotenv import load_dotenv
 import httpx
 
 # Load .env file from current working directory or fallback to system environment variables
-load_dotenv()
+from pathlib import Path
+
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 # Configuration Settings
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+# SARVAM_API_KEY = ""
 SARVAM_BASE_URL = os.getenv("SARVAM_BASE_URL", "https://api.sarvam.ai/v1")
 SARVAM_MODEL = os.getenv("SARVAM_MODEL", "sarvam-105b")
 
