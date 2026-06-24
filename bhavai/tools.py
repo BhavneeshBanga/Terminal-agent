@@ -403,3 +403,13 @@ TOOL_DISPATCH = {
     "run_command":   run_command,
     # 'final_answer' is handled directly in agent.py
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extended tool registry (tools_extended.py) — merged in here, at the bottom,
+# to avoid a circular import (tools_extended imports validate_path / CWD /
+# ensure_git_initialized / _git_stage FROM this module).
+# ─────────────────────────────────────────────────────────────────────────────
+
+from bhavai.tools_extended import EXTENDED_TOOL_DISPATCH  # noqa: E402
+
+TOOL_DISPATCH.update(EXTENDED_TOOL_DISPATCH)
