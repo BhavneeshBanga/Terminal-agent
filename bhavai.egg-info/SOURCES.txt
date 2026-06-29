@@ -8,11 +8,14 @@ bhavai/llm.py
 bhavai/main.py
 bhavai/memory.py
 bhavai/modes.py
+bhavai/test_tools_extended.py
 bhavai/tools.py
+bhavai/tools_extended.py
 bhavai.egg-info/PKG-INFO
 bhavai.egg-info/SOURCES.txt
 bhavai.egg-info/dependency_links.txt
 bhavai.egg-info/entry_points.txt
 bhavai.egg-info/requires.txt
 bhavai.egg-info/top_level.txt
+bhavai/core/messages.py
 tests/test_tools.py

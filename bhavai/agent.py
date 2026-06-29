@@ -347,7 +347,7 @@ def run_agent_loop(
 
     step_count            = 0
     consecutive_json_errs = 0
-
+    calls = 0
     while step_count < max_steps:
         step_count += 1
         logger.info("ReAct step %d/%d", step_count, max_steps)
@@ -362,8 +362,10 @@ def run_agent_loop(
         with console.status("[bold blue]Thinking…[/bold blue]", spinner="dots"):
             try:
                 messages     = memory.get_messages(system_prompt)
+                # print("messages", messages)
                 # ── KEY CHANGE: continuation instead of single-shot ──────── #
-                raw_response = query_llm_with_continuation(messages)
+                # raw_response = query_llm_with_continuation(messages, calls=calls % 4)
+                raw_response = query_llm_with_continuation(messages, calls=calls % 4)
             except Exception as exc:
                 err = f"LLM Error: {exc}"
                 console.print(f"[bold red]{err}[/bold red]")
@@ -462,7 +464,23 @@ def run_agent_loop(
         ))
 
         memory.add_message("assistant", raw_response)
-        memory.add_message("user", f"Observation from {tool_name}:\n{result}")
+        memory.add_message("system", f"Observation from {tool_name}:\n{result}")
+
+        calls = calls + 1
+        
+
+
+        from bhavai.core.messages import get_last_n_tools
+        last_3_tools = get_last_n_tools(messages)
+        if last_3_tools == [
+            "read_file",
+            "read_file",
+            "read_file"
+        ]:
+            memory.add_message(
+                "system",
+                "The file is empty. Stop reading it again. Proceed with creating new content."
+            )
 
     timeout_msg = (f"ReAct loop hit {max_steps}-step limit. "
                    "Task may be incomplete — try a more specific request.")

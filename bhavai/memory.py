@@ -14,6 +14,7 @@ class ConversationMemory:
         self.messages.append({"role": role, "content": content})
         logger.debug("Memory added message from role: %s (length: %d)", role, len(content))
 
+
     def clear(self):
         """Clears memory."""
         self.messages.clear()

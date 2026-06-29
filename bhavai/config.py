@@ -16,6 +16,16 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 SARVAM_BASE_URL = os.getenv("SARVAM_BASE_URL", "https://api.sarvam.ai/v1")
 SARVAM_MODEL = os.getenv("SARVAM_MODEL", "sarvam-105b")
 
+
+GROQ_API_KEY1 = os.getenv("GROQ_API_KEY1")
+GROQ_API_KEY2 = os.getenv("GROQ_API_KEY2")
+GROQ_API_KEY3 = os.getenv("GROQ_API_KEY3")
+GROQ_API_KEY4 = os.getenv("GROQ_API_KEY4")
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
+
+
 # Working directory
 CWD = Path.cwd().resolve()
 

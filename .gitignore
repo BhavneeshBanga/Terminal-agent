@@ -5,3 +5,8 @@ __pycache__/
 .env
 updated/
 output/
+llm.py
+summaries/
+summary
+codeGhost/
+faltu.json

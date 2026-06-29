@@ -15,6 +15,7 @@ ensure_git_initialized() is called at the start of every mutating tool so
 that all file changes are immediately trackable via `git diff HEAD`.
 """
 
+
 import re
 import subprocess
 from pathlib import Path

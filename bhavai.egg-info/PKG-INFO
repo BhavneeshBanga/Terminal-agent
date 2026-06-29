@@ -12,10 +12,18 @@ Requires-Dist: httpx>=0.24.0
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0.0; extra == "dev"
 
+
+
 # 🚀 BhavAI — Terminal Edition AI Agent
 
 BhavAI is a production-ready, lightweight, personal terminal AI agent powered exclusively by the **Sarvam-105B LLM API**. It operates directly within your current working directory, following a robust **Reason → Act → Observe** (ReAct) loop to solve complex tasks.
 
+
+```
+if want to see antigarvity code run
+git stash list
+git stash apply
+```
 
 
 ---
@@ -112,4 +120,447 @@ Any attempt to access parent directories via relative pathways (`../`) or absolu
 To run unit tests for tools, blocklists, and sandboxing:
 ```bash
 pytest tests/
+``` 
+
+# BhavAI — Terminal Coding Agent
+
+Ye README batata hai ki tera **BhavAI** agent andar se kaise kaam karta hai —
+ReAct loop kahan chalta hai, tool calling kaise dispatch hoti hai, 4096-token
+limit ko kaise handle kiya gaya hai, aur har file ka exact role kya hai.
+
+---
+
+## 1. Project ki ek-line summary
+
+User terminal mein ek task type karta hai → LLM (Sarvam) ek JSON return
+karta hai jisme `thought` + `tool_name` + `tool_args` hota hai → agent us
+tool ko Python mein actually call karta hai → result (observation) wapas
+LLM ko de diya jaata hai → ye loop chalta rehta hai jab tak LLM
+`final_answer` na bole.
+
+Isi cycle ka naam hai **ReAct loop** (**Re**ason → **Act** → Observe).
+
+---
+
+## 2. File-by-file: kaun kya kaam karta hai
+
 ```
+bhavai/
+├── agent.py              ← ReAct loop ka core. System prompt yahan hai.
+├── llm.py                ← Sarvam API se baat karta hai (with retries + continuation)
+├── tools.py               ← Core sandboxed tools (read/write/run_command) + dispatch registry
+├── tools_extended.py      ← Extra read-oriented tools (search, outline, diff, AST edit...)
+├── config.py              ← CWD, API key, logger (referenced, file not in this drop)
+├── context.py             ← .gitignore parsing, folder tree, .env detection (referenced)
+└── memory.py               ← ConversationMemory — message history rakhta hai (referenced)
+```
+
+> Note: `config.py`, `context.py`, `memory.py` is README mein **usage ke
+> basis par** describe kiye gaye hain (jo functions inse import ho rahe
+> hain unse) — inki actual file content is conversation mein upload nahi
+> hui thi, isliye agar inme kuch custom logic hai jo yahan nahi hai, wo
+> README mein reflect nahi hoga.
+
+---
+
+## 3. Entry point se shuru: `run_agent_loop()` — `agent.py`
+
+Ye function poora ReAct loop run karta hai. Step by step:
+
+```python
+def run_agent_loop(user_input, memory, current_mode, plan_steps=None,
+                    max_steps=30, console=None):
+```
+
+### Step-by-step kya hota hai (har "step" = ek LLM call + ek tool call):
+
+1. **Task prompt banaya jaata hai.**
+   Agar `plan_steps` diya gaya hai (multi-step approved plan), to user_input
+   ke saath plan bhi prompt mein jod diya jaata hai, aur ek reminder bhi:
+   "files > 50 lines ke liye append_chunk use karo."
+
+2. **`memory.add_message("user", task_prompt)`** — conversation history mein
+   ye turn record ho jaata hai.
+
+3. **`while step_count < max_steps:` loop shuru** (default cap = 30 steps,
+   yani agent infinite loop mein nahi phas sakta).
+
+   Har iteration mein:
+
+   a. **Folder tree taaza banaya jaata hai** (`get_folder_tree_string(CWD)`)
+      — taaki LLM ko har step pe current directory structure dikhe (agar
+      pichle step mein koi file create/move hui ho).
+
+   b. **System prompt format hota hai** (`SYSTEM_PROMPT_TEMPLATE.format(...)`)
+      — isme CWD path, folder tree, aur **saare available tools ki list +
+      unke argument schema** hardcoded hain (Section 5 dekho).
+
+   c. **LLM ko call kiya jaata hai:**
+      ```python
+      messages = memory.get_messages(system_prompt)
+      raw_response = query_llm_with_continuation(messages)
+      ```
+      Ye `llm.py` ka function hai — agar LLM ka response 4096-token limit
+      pe cut ho jaaye, ye automatically continuation call laga ke pura
+      response stitch kar deta hai (Section 6 mein detail).
+
+   d. **JSON parse hota hai:** `parse_llm_json(raw_response)`.
+      Agar JSON malformed hai (usually truncation ki wajah se), agent ek
+      structured error message LLM ko bhej deta hai jisme exact instruction
+      hota hai "append_chunk use karo, ≤50 lines per chunk." 3 consecutive
+      JSON errors ke baad loop **abort** ho jaata hai (infinite retry se
+      bachne ke liye).
+
+   e. **`thought` console pe print hota hai** (Rich `Panel` ke through) —
+      tujhe dikhta hai LLM kya "soch" raha hai.
+
+   f. **Tool dispatch (asli kaam yahan hota hai):**
+      ```python
+      if tool_name == "final_answer":
+          return tool_args.get("answer")
+
+      if tool_name in TOOL_DISPATCH:
+          tool_func = TOOL_DISPATCH[tool_name]
+          result = tool_func(**tool_args)
+      else:
+          result = f"Error: Unknown tool '{tool_name}'."
+      ```
+      `TOOL_DISPATCH` ek plain Python dict hai jo tool ka naam (string) →
+      actual Python function map karta hai. Iska poora detail Section 4
+      mein hai.
+
+   g. **Observation memory mein add hoti hai:**
+      ```python
+      memory.add_message("assistant", raw_response)
+      memory.add_message("user", f"Observation from {tool_name}:\n{result}")
+      ```
+      Yani tool ka result agle LLM call ke "user" turn ban jaata hai — isi
+      tarah LLM ko pata chalta hai ki uska pichla action kya result laaya.
+
+4. Loop tab tak chalta hai jab tak LLM `tool_name = "final_answer"` na bheje,
+   ya `max_steps` (30) khatam na ho jaaye.
+
+### Visual flow:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                         run_agent_loop()                           │
+│                                                                    │
+│   user_input ──► memory.add_message("user", task_prompt)           │
+│                                                                    │
+│   ┌──────────────── while step_count < 30 ───────────────────────┐ │
+│   │                                                              │ │
+│   │  1. system_prompt = SYSTEM_PROMPT_TEMPLATE.format(...)       │ │
+│   │  2. messages = memory.get_messages(system_prompt)            │ │
+│   │  3. raw_response = query_llm_with_continuation(messages)   ──┼─┼──► llm.py
+│   │  4. parsed = parse_llm_json(raw_response)                    │ │
+│   │              │                                               │ │
+│   │              ├─ tool_name == "final_answer" ──► RETURN       │ │
+│   │              │                                               │ │
+│   │              └─ tool_name in TOOL_DISPATCH:                  │ │
+│   │                     result = TOOL_DISPATCH[tool_name](**args)┼─┼──► tools.py /
+│   │              │                                               │ │    tools_extended.py
+│   │  5. memory.add_message("assistant", raw_response)            │ │
+│   │  6. memory.add_message("user", f"Observation: {result}")     │ │
+│   │                                                              │ │
+│   └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. Tool calling — kahan-kahan se chal rahi hai (sabse important part)
+
+Tool calling **3 jagah** involve hoti hai:
+
+### (a) System prompt mein — LLM ko "menu" dikhana
+
+`agent.py` ke `SYSTEM_PROMPT_TEMPLATE` mein har tool ka:
+- naam
+- expected JSON args (`{"path": "string", ...}`)
+- ek-line usage hint
+
+...sab kuch **text ke roop mein** LLM ko bhej diya jaata hai. LLM koi
+"function calling" API feature use nahi kar raha — ye plain JSON-output
+prompting hai. LLM khud decide karta hai kaunsa tool chalana hai, aur
+sirf JSON return karta hai:
+
+```json
+{
+  "thought": "...",
+  "tool_name": "search_code",
+  "tool_args": {"query": "validate_token", "path": "."}
+}
+```
+
+### (b) `TOOL_DISPATCH` registry — naam → function mapping
+
+`tools.py` ke bottom mein:
+
+```python
+TOOL_DISPATCH = {
+    "list_folder":   list_folder,
+    "read_file":     read_file,
+    "write_file":    write_file,
+    "update_file":   update_file,
+    "append_chunk":  append_chunk,
+    "run_command":   run_command,
+}
+
+from bhavai.tools_extended import EXTENDED_TOOL_DISPATCH
+TOOL_DISPATCH.update(EXTENDED_TOOL_DISPATCH)   # merge dono dicts
+```
+
+Aur `tools_extended.py` ke bottom mein:
+
+```python
+EXTENDED_TOOL_DISPATCH = {
+    "search_code":          search_code,
+    "find_files":           find_files,
+    "get_outline":          get_outline,
+    "list_todos":           list_todos,
+    "get_diff":              get_diff,
+    "check_dependencies":   check_dependencies,
+    "rename_path":           rename_path,
+    "fetch_url":             fetch_url,
+    "get_function_source":  get_function_source,
+    "insert_function":       insert_function,
+    "replace_function":      replace_function,
+}
+```
+
+**Circular import se bachne ka tareeka:** `tools_extended.py` `tools.py`
+se `validate_path`, `_git_stage`, `ensure_git_initialized` import karta
+hai. Isliye `tools.py` apna `TOOL_DISPATCH` define karne ke **baad**
+`tools_extended` ko import karta hai (file ke sabse bottom mein, comment
+ke saath `# noqa: E402`). Agar ye order ulta hota, Python circular
+import error deta.
+
+### (c) Actual dispatch — `agent.py` mein call hone ka moment
+
+```python
+tool_func = TOOL_DISPATCH[tool_name]
+result = tool_func(**tool_args) if isinstance(tool_args, dict) else tool_func()
+```
+
+Yahi woh **single line** hai jahan LLM ka decision (`tool_name` +
+`tool_args` JSON) ek real Python function call mein convert hota hai.
+Agar LLM ne kisi crazy tool naam ka invent kar diya, `else` branch
+fallback deta hai with the list of valid tool names — taaki LLM agle
+attempt mein khud correct kar sake.
+
+### Pura request-flow ek tool ke liye (example: `replace_function`)
+
+```
+LLM JSON:
+  {"tool_name": "replace_function",
+   "tool_args": {"path": "app.py", "function_name": "foo", "new_source": "..."}}
+        │
+        ▼
+agent.py: tool_func = TOOL_DISPATCH["replace_function"]
+        │
+        ▼
+tools_extended.py: replace_function(path="app.py", function_name="foo", new_source="...")
+        │
+        ├─► tools.py: ensure_git_initialized()      (har mutating call ke start mein)
+        ├─► tools.py: validate_path("app.py")        (sandbox check — CWD ke bahar nahi jaa sakta)
+        ├─► context.py: is_env_file(resolved)         (.env / secrets guard)
+        ├─► ast.parse(new_source)                       (syntax validate, file likhne SE PEHLE)
+        ├─► ast.walk(tree) se function ka exact lineno/end_lineno dhoondha
+        ├─► purani lines ko nayi lines se splice kiya
+        ├─► resolved.write_text(...)                     (file disk pe likhi gayi)
+        └─► tools.py: _git_stage(resolved)               (git add, taaki diff dikhe)
+        │
+        ▼
+return "✓ Replaced 'foo' ... Run `git diff HEAD` to review."
+        │
+        ▼
+agent.py: result console pe print hota hai, memory mein "Observation" ban jaata hai
+```
+
+---
+
+## 5. Sabhi tools ki list (kaunsa file mein hai, kya karta hai)
+
+| Tool | File | Mutating? | Kaam |
+|---|---|---|---|
+| `list_folder` | `tools.py` | No | Gitignore-aware folder tree dikhata hai |
+| `read_file` | `tools.py` | No | Pura file content return karta hai (.env blocked) |
+| `write_file` | `tools.py` | **Yes** | Naya file banata ya overwrite karta hai — sirf <60 lines ke liye |
+| `update_file` | `tools.py` | **Yes** | Legacy append/overwrite — naya code `append_chunk` use kare |
+| `append_chunk` | `tools.py` | **Yes** | 4096-token limit ka core fix — file ko ≤50-line chunks mein likhta hai |
+| `run_command` | `tools.py` | **Yes** (shell) | Blocklist-checked shell command run karta hai, 10s timeout |
+| `search_code` | `tools_extended.py` | No | Grep-jaisa text/regex search, sabse zyada used tool |
+| `find_files` | `tools_extended.py` | No | Glob pattern se filename search |
+| `get_outline` | `tools_extended.py` | No | AST se class/function signatures + line numbers |
+| `list_todos` | `tools_extended.py` | No | TODO/FIXME/HACK/XXX/BUG markers scan karta hai |
+| `get_diff` | `tools_extended.py` | No | `git diff HEAD` dikhata hai |
+| `check_dependencies` | `tools_extended.py` | No | requirements.txt/pyproject.toml/package.json check karta hai |
+| `rename_path` | `tools_extended.py` | **Yes** | Safe move/rename — destination overwrite nahi karta |
+| `fetch_url` | `tools_extended.py` | No (network) | Real docs/API pages fetch karta hai |
+| `get_function_source` | `tools_extended.py` | No | **Naya** — AST se ek function ka exact source nikalta hai |
+| `insert_function` | `tools_extended.py` | **Yes** | **Naya** — file ke end mein naya function add karta hai |
+| `replace_function` | `tools_extended.py` | **Yes** | **Naya** — AST line numbers se ek function ko replace karta hai |
+
+Last 3 tools maine pichle session mein add kiye the — README mein bhi
+include kar diye hain taaki documentation sync rahe.
+
+---
+
+## 6. 4096-token problem — pura 5-layer defense
+
+Tera Sarvam-105B model ek baar mein max **4096 output tokens** hi de sakta
+hai. Agar LLM ek lambi file likhne ki koshish karta JSON ke andar, woh
+beech mein cut ho jaata aur JSON corrupt ho jaata. Isko handle karne ke
+liye **5 layers** hain:
+
+```
+Layer 1 — SYSTEM PROMPT mein hi rule likha hai:
+           "MAXIMUM 50 LINES OF CODE PER TOOL CALL"
+           (agent.py, SYSTEM_PROMPT_TEMPLATE)
+
+Layer 2 — append_chunk() tool isi rule ko ENFORCE karta hai:
+           file ko ek chunk (≤50 lines) likho, done=false rakho,
+           agla chunk bhejo, last pe done=true.
+           (tools.py)
+
+Layer 3 — query_llm_with_continuation() — agar LLM phir bhi ek single
+           response mein 4096 tokens cross kar gaya (stop_reason ==
+           "max_tokens"), to llm.py khud-ba-khud ek "continue from
+           where you left off" follow-up call lagata hai, aur sab
+           content ko ek string mein jod deta hai — max 6 rounds tak.
+           (llm.py, query_llm_with_continuation)
+
+Layer 4 — JSON repair pipeline — agar phir bhi JSON truncated nikla
+           (e.g. ek unterminated string), _fix_truncated_json() text
+           ko walk karke open braces/brackets/quotes close karta hai
+           aur dobara parse try karta hai.
+           (agent.py, clean_json_text → _fix_truncated_json)
+
+Layer 5 — Recovery feedback — agar JSON phir bhi parse nahi hua,
+           agent LLM ko EXACT instruction wapas bhejta hai:
+           "Use append_chunk instead with ≤50 lines per chunk."
+           3 consecutive failures ke baad loop abort ho jaata hai.
+           (agent.py, run_agent_loop ke try/except ValueError block)
+```
+
+### `query_llm_with_continuation()` ka internal logic (`llm.py`)
+
+```
+Round 1: _call_api(messages) → (content_1, stop_reason_1)
+         if stop_reason_1 == "end_turn": return content_1   # done
+
+         if stop_reason_1 == "max_tokens":
+             history.append({"role": "assistant", "content": content_1})
+             history.append({"role": "user", "content": CONTINUATION_PROMPT})
+             # CONTINUATION_PROMPT = "Continue exactly from where you left
+             # off. Do NOT repeat any content already written..."
+
+Round 2: _call_api(history) → (content_2, stop_reason_2)
+         full_output = content_1 + content_2
+         ... repeat until end_turn ya max_rounds=6
+```
+
+Ye sab `_call_api()` ke andar ek hi jagah se chalta hai — wahi function
+retries (429/500/502/503/504 pe exponential backoff) aur error handling
+bhi karta hai.
+
+---
+
+## 7. Security / Sandbox model
+
+Teen guarantees hain jo **har** tool follow karta hai (chahe `tools.py`
+mein ho ya `tools_extended.py` mein):
+
+1. **Path sandboxing — `validate_path()`** (`tools.py`)
+   Har path ko `CWD` ke against resolve karke check kiya jaata hai ki woh
+   `CWD` ke andar hi hai. Bahar gaya to `ValueError` raise hota hai —
+   `../../etc/passwd` jaisa traversal block ho jaata hai.
+
+2. **Secrets guard — `is_env_file()`** (`context.py`, used everywhere)
+   `.env`, `.env.*`, `credentials.json` jaisी files kabhi bhi read/write/
+   move nahi ho sakti — na hi unka content kabhi LLM tak pahunchta hai.
+
+3. **Zero-deletion policy**
+   Poore codebase mein koi delete tool nahi hai — by design. `rename_path`
+   bhi sirf move karta hai, aur destination already exist karta ho to
+   **refuse** karta hai (overwrite kabhi nahi). `run_command` mein bhi
+   `rm`, `rmdir`, `del`, `shutil.rmtree`, `os.remove` jaise commands
+   `BLOCKED_COMMANDS` list se word-boundary regex check ho ke reject ho
+   jaate hain.
+
+4. **Git safety net — `ensure_git_initialized()` + `_git_stage()`**
+   Pehli mutating call pe automatically `git init` ho jaata hai (agar
+   already nahi hai), aur har successful write `git add` ho jaata hai.
+   Matlab tu kabhi bhi `git diff HEAD` chala ke dekh sakta hai ki agent
+   ne actually kya badla — ye ek built-in undo/audit trail hai.
+
+---
+
+## 8. `get_function_source` / `insert_function` / `replace_function` — kaise kaam karte hain
+
+Teeno tools **AST (Abstract Syntax Tree)** use karte hain, text-matching
+nahi — isliye agar kisi comment ya docstring mein function ka naam mention
+hai, ye confuse nahi hote.
+
+```
+get_function_source(path, function_name)
+   1. file parse karo: tree = ast.parse(text)
+   2. ast.walk(tree) se FunctionDef/AsyncFunctionDef dhoondho jiska
+      naam match kare
+   3. node.lineno / node.end_lineno se exact line range nikalo
+   4. wahi lines numbered format mein return karo
+
+insert_function(path, new_source)
+   1. ast.parse(new_source) — pehle validate karo ki syntax valid hai
+      (agar invalid hai, file ko touch hi nahi karte)
+   2. file ka existing content padho
+   3. content + "\n\n\n" + new_source + "\n" — end mein append karo
+   4. file likho, git stage karo
+
+replace_function(path, function_name, new_source)
+   1. ast.parse(new_source) — syntax validate
+   2. file parse karo, function dhoondo (jaise get_function_source mein)
+   3. lines[:start-1] + new_function_lines + lines[end:] — splice karo
+   4. file likho, git stage karo
+```
+
+Inka use-case: jab tu **sirf ek function** change karna chahta hai, to
+poori file ko `write_file`/`append_chunk` se rewrite karne ki zaroorat
+nahi — token budget bachta hai aur risk bhi kam hota hai ki koi aur
+function accidentally corrupt ho jaaye.
+
+---
+
+## 9. Quick mental model (TL;DR)
+
+```
+User types task
+      │
+      ▼
+agent.py: run_agent_loop()
+      │
+      ├──► llm.py: query_llm_with_continuation()  ──► Sarvam API
+      │         (4096-token limit handle karta hai)
+      │
+      ▼
+agent.py: parse_llm_json()  ──► {thought, tool_name, tool_args}
+      │
+      ▼
+tools.py: TOOL_DISPATCH[tool_name]   (12 + 11 = ~17 tools available)
+      │
+      ├──► tools.py          (file I/O, shell, chunked writes)
+      └──► tools_extended.py (search, outline, diff, deps, AST edits, fetch_url)
+      │
+      ▼
+result string ──► memory mein "Observation" ban jaata hai
+      │
+      ▼
+Loop repeat hota hai jab tak tool_name == "final_answer"
+```
+
+Bas itna hi — ye tera poora agent hai: **ek prompt, ek dict, ek loop.**
+Saari "intelligence" prompt engineering aur tool design mein hai, code
+khud bahut simple aur readable hai.
+
