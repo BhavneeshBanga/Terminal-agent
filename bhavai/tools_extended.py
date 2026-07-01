@@ -730,3 +730,10 @@ EXTENDED_TOOL_DISPATCH = {
     "insert_function":      insert_function,
     "replace_function":     replace_function,
 }
+
+
+if __name__ == "__main__":
+    print(search_code(
+        path=".",
+        query="mock_cwd"
+    ))

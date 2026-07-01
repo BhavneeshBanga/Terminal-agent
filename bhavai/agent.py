@@ -331,8 +331,8 @@ def run_agent_loop(
     BEFORE we attempt JSON parsing. This means the JSON repair pipeline
     (Layer 4) now only needs to handle edge cases, not the common case.
     """
-    if console is None:
-        console = Console()
+    # if console is None:
+    #     console = Console()
 
     task_prompt = user_input
     if plan_steps:
@@ -364,7 +364,7 @@ def run_agent_loop(
                 messages     = memory.get_messages(system_prompt)
                 # print("messages", messages)
                 # ── KEY CHANGE: continuation instead of single-shot ──────── #
-                # raw_response = query_llm_with_continuation(messages, calls=calls % 4)
+                # raw_response = query_llm_with_continuation(messages)
                 raw_response = query_llm_with_continuation(messages, calls=calls % 4)
             except Exception as exc:
                 err = f"LLM Error: {exc}"
