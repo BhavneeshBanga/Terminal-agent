@@ -139,13 +139,13 @@ def _call_api(messages: list, calls: int,  temperature: float = 0.0) -> tuple[st
         try:
             with httpx.Client(timeout=90.0) as client:
                 response = client.post(url, json=payload, headers=headers)
-                print("response", response)
+                # print("response", response)
 
             status = response.status_code
 
             if status == 200:
                 data = response.json()
-                print("json response ", data)
+                # print("json response ", data)
                 try:
                     choice      = data["choices"][0]
                     content     = choice["message"]["content"]

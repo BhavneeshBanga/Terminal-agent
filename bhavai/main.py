@@ -21,6 +21,9 @@ from bhavai.memory import ConversationMemory
 from bhavai.modes import AgentMode, prompt_and_confirm_plan
 from bhavai.agent import run_agent_loop
 
+import getpass
+
+
 console = Console()
 
 @click.group(invoke_without_command=True)
@@ -96,7 +99,8 @@ def wake(action):
     for line in logo:
         print(GOLD + BOLD + line + R)
     print()
-    typewrite("  ⚡  Terminal Mode — Bhavneesh ke liye  ⚡", delay=0.022, color=GOLD + BOLD)
+    username = getpass.getuser()
+    typewrite(f"  ⚡  Terminal Edition — {username} ke liye  ⚡", delay=0.022, color=GOLD + BOLD)
     print(YEL + "▀" * 58 + R)
     print()
 
@@ -134,7 +138,7 @@ def wake(action):
             if not user_input:
                 continue
 
-            ## commands
+            ## COMMANDS
             is_command = False
 
             if user_input.startswith("/"):
