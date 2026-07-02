@@ -36,6 +36,36 @@ LOG_FILE = LOG_DIR / "bhavai.log"
 
 
 
+
+
+
+
+from dotenv import load_dotenv
+import httpx
+
+# Load .env file from current working directory or fallback to system environment variables
+from pathlib import Path
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
+import os
+
+# ── Sarvam API ──────────────────────────────────────────────
+SARVAM_API_KEY   = os.getenv("SARVAM_API_KEY")
+# print(SARVAM_API_KEY)
+
+SARVAM_BASE_URL  = "https://api.sarvam.ai/v1"
+SARVAM_MODEL     = "sarvam-105b"   # or "sarvam-30b" for faster/cheaper
+
+# ── Agent settings ───────────────────────────────────────────
+MAX_STEPS        = 6      # how many Thought→Action→Observation loops before giving up
+TEMPERATURE      = 0.2    # low = more focused/deterministic
+MAX_TOKENS       = 4096    # max tokens per LLM response
+
+
+
+
+
+
 # Setup logging
 logging.basicConfig(
     level=logging.DEBUG,

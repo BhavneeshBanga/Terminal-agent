@@ -93,7 +93,6 @@ def prompt_and_confirm_plan(user_input: str, folder_tree: str, console: Console)
             console.print("[yellow]Plan execution cancelled.[/yellow]")
             return False, []
         else:
-            # User provided feedback to adjust the plan
+            # if  user provided feedback to adjust the plan
             feedback = ans
             console.print(f"[blue]Updating plan based on feedback: '{feedback}'...[/blue]")
-            # Loop runs again with feedback passed in

@@ -1,3 +1,9 @@
+"""
+Recursivelu build the tree for the
+Current working directory and returns as string
+"""
+
+
 import os
 from pathlib import Path
 import fnmatch
@@ -132,7 +138,21 @@ def build_folder_tree(root_dir: Path, current_dir: Path = None, prefix: str = ""
     return tree_lines
 
 def get_folder_tree_string(root_dir: Path) -> str:
-    """Returns the visual folder tree as a single string."""
+    """
+    Returns the visual folder tree as a single string.
+    """
     lines = [f"{root_dir.name}/"]
     lines.extend(build_folder_tree(root_dir))
     return "\n".join(lines)
+
+
+
+
+
+
+from bhavai.config import CWD
+import time
+if __name__ == "__main__":
+    st = time.time()
+    print(get_folder_tree_string(CWD))
+    print("total time it takes : ", time.time() - st)

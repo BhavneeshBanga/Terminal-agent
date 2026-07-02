@@ -194,3 +194,7 @@ def test_git_initialization(mock_cwd):
     res = subprocess.run(["git", "log", "--oneline"], cwd=mock_cwd, capture_output=True, text=True)
     assert res.returncode == 0
     assert "Initial commit" in res.stdout
+
+
+
+
