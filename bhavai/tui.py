@@ -138,7 +138,30 @@ def list_available_commands(limit: int = 5) -> list[tuple[str, str]]:
             break
     return results
 
+class LogConsole:
+    """Drop-in replacement for rich.Console — writes into the TUI's RichLog
+    instead of raw stdout. Same .print()/.status() interface so modes.py
+    and agent.py need ZERO changes.
+    """
+    def __init__(self, log: "RichLog") -> None:
+        self._log = log
 
+    def print(self, *args, **kwargs) -> None:
+        for arg in args:
+            self._log.write(arg)
+
+    def status(self, message: str, spinner: str = "dots"):
+        # No real spinner in log mode — just print the status line once.
+        self._log.write(message)
+        return _NoopStatus()
+
+
+class _NoopStatus:
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        return False
+    
 class BhavAI(App):
     """Persistent chat-style TUI for the BhavAI agent."""
 
@@ -185,9 +208,10 @@ class BhavAI(App):
         super().__init__()
         self.cfg = get_config_summary()
         self.memory = ConversationMemory()
-        # A plain rich Console bound to the real stdout, used only while
-        # the Textual screen is suspended (see _run_task below).
-        self.raw_console = Console()
+        self.log_console: "LogConsole | None" = None
+        self.awaiting_plan_confirmation = False
+        self._pending_user_input: str | None = None
+        self._pending_plan_steps: list = []
 
 
 
@@ -234,6 +258,7 @@ class BhavAI(App):
         log.write(
             Text("? for shortcuts · mode agent / mode plan to switch", style="dim"),
         )
+        self.log_console = LogConsole(log)
 
         self.query_one(Input).focus()
 
@@ -335,6 +360,22 @@ class BhavAI(App):
         log.write(Text.assemble(("\u276f ", "bold green"), (user_input, "bold")))
 
         low = user_input.lower()
+        if self.awaiting_plan_confirmation:
+            self.awaiting_plan_confirmation = False
+            if low == "y":
+                log.write("[bold green]Plan approved. Executing step-by-step...[/bold green]")
+                self._start_agent_worker(self._pending_user_input, self._pending_plan_steps)
+            elif low in ("n", "no", ""):
+                log.write("[yellow]Plan execution cancelled.[/yellow]")
+            else:
+                log.write(f"[blue]Updating plan based on feedback: '{user_input}'...[/blue]")
+                folder_tree = get_folder_tree_string(CWD)
+                plan_steps = prompt_and_confirm_plan(
+                    self._pending_user_input, folder_tree, self.log_console, feedback=user_input
+                )
+                self._pending_plan_steps = plan_steps
+                self.awaiting_plan_confirmation = True
+            return
 
         if low == "mode agent":
             self.mode = AgentMode.AGENT
@@ -352,7 +393,14 @@ class BhavAI(App):
             log.write("[green]Goodbye from BhavAI! Waking down...[/green]")
             self.exit()
             return
-        
+        if low == "/save":
+            save_path = CWD / "bhavai_conversation.md"
+            try:
+                self.memory.save_to_file(save_path)
+                log.write(f"[green]✓ Conversation saved to {save_path}[/green]")
+            except Exception as e:
+                log.write(f"[red]Failed to save conversation: {e}[/red]")
+            return
         if low == "/init":
             log.write("[cyan]Generating BHAVAI.md...[/cyan]")
 
@@ -382,55 +430,84 @@ class BhavAI(App):
             self._run_task(command_text, log)
             return
 
-        self._run_task(user_input, log)
+        if self.mode == AgentMode.PLAN:
+            folder_tree = get_folder_tree_string(CWD)
+            plan_steps = prompt_and_confirm_plan(user_input, folder_tree, self.log_console)
+            self._pending_user_input = user_input
+            self._pending_plan_steps = plan_steps
+            self.awaiting_plan_confirmation = True
+        else:
+            self._start_agent_worker(user_input)
 
     # ------------------------------------------------------------------ #
     # Task execution — hands the real terminal back via suspend()
     # ------------------------------------------------------------------ #
+    def _start_agent_worker(self, user_input: str, plan_steps: list | None = None) -> None:
+        self.run_worker(
+            self._agent_worker(user_input, plan_steps),
+            exclusive=True,
+            thread=True,
+        )
 
-    def _run_task(self, user_input: str, log: RichLog) -> None:
+    def _agent_worker(self, user_input: str, plan_steps: list | None) -> None:
+        log = self.query_one("#log", RichLog)
         try:
-            with self.suspend():
-                os.system("cls" if os.name == "nt" else "clear")
-                self.raw_console.rule("[bold green]BhavAI is working[/bold green]")
-
-                if self.mode == AgentMode.PLAN:
-                    folder_tree = get_folder_tree_string(CWD)
-                    should_proceed, plan_steps = prompt_and_confirm_plan(
-                        user_input, folder_tree, self.raw_console
-                    )
-                    if should_proceed:
-                        self.raw_console.print(
-                            "[bold green]Plan approved. Executing step-by-step...[/bold green]"
-                        )
-                        run_agent_loop(
-                            user_input=user_input,
-                            memory=self.memory,
-                            current_mode=self.mode,
-                            plan_steps=plan_steps,
-                            console=self.raw_console,
-                        )
-                    else:
-                        self.raw_console.print("[yellow]Plan rejected — nothing executed.[/yellow]")
-                else:
-                    self.raw_console.print("[bold yellow]Executing task autonomously...[/bold yellow]")
-                    run_agent_loop(
-                        user_input=user_input,
-                        memory=self.memory,
-                        current_mode=self.mode,
-                        console=self.raw_console,
-                    )
-
-                self.raw_console.print("\n[dim]Press Enter to return to BhavAI...[/dim]")
-                input()
-        except KeyboardInterrupt:
-            log.write("[yellow]Task interrupted by user.[/yellow]")
-            logger.info("TUI task execution interrupted via KeyboardInterrupt.")
+            run_agent_loop(
+                user_input=user_input,
+                memory=self.memory,
+                current_mode=self.mode,
+                plan_steps=plan_steps,
+                console=self.log_console,
+            )
         except Exception as e:  # noqa: BLE001
             log.write(f"[bold red]Unexpected Error:[/bold red] {e}")
-            logger.exception("TUI session encountered unexpected error: %s", e)
+            logger.exception("TUI worker encountered unexpected error: %s", e)
         else:
-            log.write("[dim]\u2713 Task complete — back in BhavAI.[/dim]")
+            log.write("[dim]✓ Task complete.[/dim]")
+
+    # def _run_task(self, user_input: str, log: RichLog) -> None:
+    #     try:
+    #         with self.suspend():
+    #             os.system("cls" if os.name == "nt" else "clear")
+    #             self.raw_console.rule("[bold green]BhavAI is working[/bold green]")
+
+    #             if self.mode == AgentMode.PLAN:
+    #                 folder_tree = get_folder_tree_string(CWD)
+    #                 should_proceed, plan_steps = prompt_and_confirm_plan(
+    #                     user_input, folder_tree, self.raw_console
+    #                 )
+    #                 if should_proceed:
+    #                     self.raw_console.print(
+    #                         "[bold green]Plan approved. Executing step-by-step...[/bold green]"
+    #                     )
+    #                     run_agent_loop(
+    #                         user_input=user_input,
+    #                         memory=self.memory,
+    #                         current_mode=self.mode,
+    #                         plan_steps=plan_steps,
+    #                         console=self.raw_console,
+    #                     )
+    #                 else:
+    #                     self.raw_console.print("[yellow]Plan rejected — nothing executed.[/yellow]")
+    #             else:
+    #                 self.raw_console.print("[bold yellow]Executing task autonomously...[/bold yellow]")
+    #                 run_agent_loop(
+    #                     user_input=user_input,
+    #                     memory=self.memory,
+    #                     current_mode=self.mode,
+    #                     console=self.raw_console,
+    #                 )
+
+    #             self.raw_console.print("\n[dim]Press Enter to return to BhavAI...[/dim]")
+    #             input()
+    #     except KeyboardInterrupt:
+    #         log.write("[yellow]Task interrupted by user.[/yellow]")
+    #         logger.info("TUI task execution interrupted via KeyboardInterrupt.")
+    #     except Exception as e:  # noqa: BLE001
+    #         log.write(f"[bold red]Unexpected Error:[/bold red] {e}")
+    #         logger.exception("TUI session encountered unexpected error: %s", e)
+    #     else:
+    #         log.write("[dim]\u2713 Task complete — back in BhavAI.[/dim]")
 
 
 def main() -> None:

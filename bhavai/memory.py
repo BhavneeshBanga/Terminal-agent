@@ -1,4 +1,6 @@
 from bhavai.config import logger
+from pathlib import Path
+
 
 class ConversationMemory:
     def __init__(self, max_chars: int = 100000):
@@ -18,6 +20,15 @@ class ConversationMemory:
     def clear(self):
         """Clears memory."""
         self.messages.clear()
+
+    def save_to_file(self, path) -> None:
+        """Dumps the full conversation history as readable markdown."""
+        lines = []
+        for msg in self.messages:
+            lines.append(f"### {msg['role'].upper()}\n\n{msg['content']}\n")
+        Path(path).write_text("\n---\n\n".join(lines), encoding="utf-8")
+
+
 
     def get_messages(self, system_prompt: str) -> list:
         """

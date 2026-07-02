@@ -96,3 +96,23 @@ def prompt_and_confirm_plan(user_input: str, folder_tree: str, console: Console)
             # if  user provided feedback to adjust the plan
             feedback = ans
             console.print(f"[blue]Updating plan based on feedback: '{feedback}'...[/blue]")
+
+## erro de rha hai ui update mai 
+# def prompt_and_confirm_plan(user_input: str, folder_tree: str, console: Console, feedback: str = None) -> list:
+#     """
+#     Generates and displays the plan. Does NOT block for confirmation —
+#     the TUI's Input box handles that via its own state machine.
+#     Returns the plan_steps list.
+#     """
+#     with console.status("[bold blue]Generating plan...", spinner="dots"):
+#         plan_steps = generate_plan(user_input, folder_tree, feedback)
+
+#     console.print("\n[bold cyan]Here's my plan:[/bold cyan]")
+#     for idx, step in enumerate(plan_steps, 1):
+#         console.print(f" [bold cyan]{idx}.[/bold cyan] {step}")
+#     console.print()
+#     console.print(
+#         "[bold yellow]Proceed?[/bold yellow] ([green]y[/green] to proceed, "
+#         "[red]n[/red] to cancel, or type feedback to edit the plan)"
+#     )
+#     return plan_steps
