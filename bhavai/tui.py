@@ -37,6 +37,8 @@ from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.widgets import Header, Footer, Input, RichLog
 from textual.reactive import reactive
+from textual.widgets import Header, Footer, Input, RichLog, OptionList
+from textual.widgets.option_list import Option
 
 from bhavai.config import get_config_summary, CWD, logger
 from bhavai.context import get_folder_tree_string
@@ -100,7 +102,6 @@ MAX_TOTAL_CHARS = 150_000    # overall cap so BHAVAI.md doesn't explode
 
 
 
-
 def generate_bhavai_md(root: Path) -> Path:
     """Walk `root`, collect every non-ignored file's path + content, and
     write a single BHAVAI.md snapshot of the codebase at the project root.
@@ -113,6 +114,31 @@ def generate_bhavai_md(root: Path) -> Path:
     return out_path
 
 
+def list_available_commands(limit: int = 5) -> list[tuple[str, str]]:
+    """Scan .bhavai/commands/*.md and return up to `limit` (name, description) pairs.
+    Description = first non-empty line of the file, stripped of markdown '#'.
+    """
+    commands_dir = CWD / ".bhavai" / "commands"
+    if not commands_dir.exists():
+        return []
+
+    results: list[tuple[str, str]] = []
+    for path in sorted(commands_dir.glob("*.md")):
+        name = path.stem
+        try:
+            first_line = next(
+                (l.strip() for l in path.read_text(encoding="utf-8").splitlines() if l.strip()),
+                "",
+            )
+        except Exception:
+            first_line = ""
+        description = first_line.lstrip("#").strip() or "No description"
+        results.append((name, description))
+        if len(results) >= limit:
+            break
+    return results
+
+
 class BhavAI(App):
     """Persistent chat-style TUI for the BhavAI agent."""
 
@@ -123,7 +149,7 @@ class BhavAI(App):
 
     #log {
         height: 1fr;
-        border: round $accent;
+        border: round green;
         padding: 0 1;
         margin: 0 1;
     }
@@ -131,8 +157,21 @@ class BhavAI(App):
     #input-box {
         dock: bottom;
         height: 3;
-        border: round $accent;
+        border: round green;
         margin: 0 1 1 1;
+    }
+    #command-suggestions {
+        dock: bottom;
+        height: auto;
+        max-height: 7;
+        border: round green;
+        margin: 0 1 4 1;
+        display: none;
+        background: $surface;
+    }
+
+    #command-suggestions.visible {
+        display: block;
     }
     """
 
@@ -164,6 +203,7 @@ class BhavAI(App):
                 placeholder=self._placeholder(),
                 id="input-box",
             )
+            yield OptionList(id="command-suggestions")
         yield Footer()
 
     def _placeholder(self) -> str:
@@ -196,6 +236,40 @@ class BhavAI(App):
         )
 
         self.query_one(Input).focus()
+
+
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        suggestions = self.query_one("#command-suggestions", OptionList)
+        value = event.value
+
+        if not value.startswith("/") or " " in value:
+            suggestions.remove_class("visible")
+            return
+
+        query = value[1:].lower()
+        matches = [
+            (name, desc) for name, desc in list_available_commands(limit=20)
+            if name.lower().startswith(query)
+        ][:5]
+
+        if not matches:
+            suggestions.remove_class("visible")
+            return
+
+        suggestions.clear_options()
+        for name, desc in matches:
+            suggestions.add_option(Option(f"/{name}  [dim]{desc}[/dim]", id=name))
+        suggestions.add_class("visible")
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id != "command-suggestions":
+            return
+        input_box = self.query_one("#input-box", Input)
+        input_box.value = f"/{event.option.id}"
+        input_box.focus()
+        self.query_one("#command-suggestions", OptionList).remove_class("visible")
+
 
     def _left_column(self, username: str) -> Table:
         cfg = self.cfg
@@ -288,6 +362,24 @@ class BhavAI(App):
             except Exception as e:
                 log.write(f"[red]Failed to generate BHAVAI.md: {e}[/red]")
 
+            return
+        if user_input.startswith("/"):
+            command_name = user_input[1:].strip()
+            command_path = CWD / ".bhavai" / "commands" / f"{command_name}.md"
+
+            if not command_path.exists():
+                log.write(f"[bold red]✗ Error:[/bold red] Command '/{command_name}' exist nahi karti.")
+                return
+
+            command_text = command_path.read_text(encoding="utf-8").strip()
+            log.write(Panel(
+                command_text,
+                title=f"[bold cyan]📄 /{command_name}.md[/bold cyan]",
+                border_style="cyan",
+            ))
+            log.write(f"[cyan]▶ Running command:[/cyan] [bold]/{command_name}[/bold]")
+
+            self._run_task(command_text, log)
             return
 
         self._run_task(user_input, log)
